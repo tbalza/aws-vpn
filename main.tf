@@ -204,12 +204,12 @@ resource "null_resource" "download_cvpn_config" {
 
       # Embed the client certificate
       echo '<cert>' >> ./client-config.ovpn
-      echo "${tls_locally_signed_cert.client_cert.cert_request_pem}" >> ./client-config.ovpn
+      echo "${tls_locally_signed_cert.client_cert.cert_pem}" >> ./client-config.ovpn
       echo '</cert>' >> ./client-config.ovpn
 
       # Embed the private key
       echo '<key>' >> ./client-config.ovpn
-      echo "${tls_private_key.server_key.private_key_pem}" >> ./client-config.ovpn
+      echo "${tls_private_key.client_key.private_key_pem}" >> ./client-config.ovpn
       echo '</key>' >> ./client-config.ovpn
     EOF
     interpreter = ["/bin/bash", "-c"]

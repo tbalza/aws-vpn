@@ -300,19 +300,35 @@ resource "aws_acm_certificate" "user_1_cvpn_client_certificate" {
 }
 
 ################################################################################
-# Download Client Configuration
+# Download Client Configuration and append necessary tags
 ################################################################################
 
 resource "null_resource" "download_cvpn_config" {
-  # Ensures this runs after the Client VPN endpoint has been created
   depends_on = [aws_ec2_client_vpn_endpoint.cvpn]
 
   provisioner "local-exec" {
-    command = "aws ec2 export-client-vpn-client-configuration --client-vpn-endpoint-id ${aws_ec2_client_vpn_endpoint.cvpn.id} --output text > ${path.module}/client-config.ovpn"
+    command = <<EOF
+      #!/bin/bash
+      set -e  # Exit on error
+
+      # Export the VPN configuration
+      aws ec2 export-client-vpn-client-configuration --client-vpn-endpoint-id ${aws_ec2_client_vpn_endpoint.cvpn.id} --output text > ./client-config.ovpn
+
+      # Embed the client certificate
+      echo '<cert>' >> ./client-config.ovpn
+      echo "${aws_acm_certificate.user_1_cvpn_client_certificate.certificate_body}" >> ./client-config.ovpn
+      echo '</cert>' >> ./client-config.ovpn
+
+      # Embed the private key
+      echo '<key>' >> ./client-config.ovpn
+      echo "${tls_private_key.user_1_cvpn_client_certificate_private_key.private_key_pem}" >> ./client-config.ovpn
+      echo '</key>' >> ./client-config.ovpn
+    EOF
+    interpreter = ["/bin/bash", "-c"]
   }
 
   triggers = {
-    # Re-run this script if the Client VPN Endpoint ID changes
-    always_run = aws_ec2_client_vpn_endpoint.cvpn.id
+    always_run = "${timestamp()}"
   }
 }
+

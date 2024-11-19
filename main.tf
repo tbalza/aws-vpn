@@ -6,8 +6,6 @@ locals {
   client_cidr = "192.168.68.0/22"
 }
 
-data "aws_partition" "current" {}
-
 ################################################################################
 # VPC
 ################################################################################
@@ -53,7 +51,6 @@ resource "aws_ec2_client_vpn_authorization_rule" "authorize_cvpn_vpc" {
   authorize_all_groups   = true
 }
 
-# For each https://github.com/hashicorp/terraform-provider-aws/issues/14717
 resource "aws_ec2_client_vpn_network_association" "associate_subnet_1" {
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.cvpn.id
   subnet_id              = module.vpc.private_subnets[0]
@@ -117,7 +114,7 @@ resource "tls_self_signed_cert" "ca_cert" {
   private_key_pem = tls_private_key.ca_key.private_key_pem
 
   subject {
-    common_name  = "ca.${var.domain_name}"
+    common_name = "ca.${var.domain_name}"
   }
 
   is_ca_certificate     = true
@@ -138,14 +135,14 @@ resource "tls_cert_request" "server_req" {
   private_key_pem = tls_private_key.server_key.private_key_pem
 
   subject {
-    common_name  = "vpn.${var.domain_name}"
+    common_name = "vpn.${var.domain_name}"
   }
 }
 
 resource "tls_locally_signed_cert" "server_cert" {
-  cert_request_pem     = tls_cert_request.server_req.cert_request_pem
-  ca_private_key_pem   = tls_private_key.ca_key.private_key_pem
-  ca_cert_pem          = tls_self_signed_cert.ca_cert.cert_pem
+  cert_request_pem   = tls_cert_request.server_req.cert_request_pem
+  ca_private_key_pem = tls_private_key.ca_key.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.ca_cert.cert_pem
 
   validity_period_hours = 87600
   allowed_uses = [
@@ -157,8 +154,8 @@ resource "tls_locally_signed_cert" "server_cert" {
 
 # Import to ACM for Client VPN use
 resource "aws_acm_certificate" "server_cert" {
-  private_key      = tls_private_key.server_key.private_key_pem
-  certificate_body = tls_locally_signed_cert.server_cert.cert_pem
+  private_key       = tls_private_key.server_key.private_key_pem
+  certificate_body  = tls_locally_signed_cert.server_cert.cert_pem
   certificate_chain = tls_self_signed_cert.ca_cert.cert_pem
 }
 
@@ -177,9 +174,9 @@ resource "tls_cert_request" "client_req" {
 }
 
 resource "tls_locally_signed_cert" "client_cert" {
-  cert_request_pem     = tls_cert_request.client_req.cert_request_pem
-  ca_private_key_pem   = tls_private_key.ca_key.private_key_pem
-  ca_cert_pem          = tls_self_signed_cert.ca_cert.cert_pem
+  cert_request_pem   = tls_cert_request.client_req.cert_request_pem
+  ca_private_key_pem = tls_private_key.ca_key.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.ca_cert.cert_pem
 
   validity_period_hours = 87600
   allowed_uses = [
@@ -195,7 +192,7 @@ resource "null_resource" "download_cvpn_config" {
   depends_on = [aws_ec2_client_vpn_endpoint.cvpn]
 
   provisioner "local-exec" {
-    command = <<EOF
+    command     = <<EOF
       #!/bin/bash
       set -e  # Exit on error
 

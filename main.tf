@@ -29,7 +29,7 @@ module "vpc" { # Creates VPC, subnets, route tables
 
 resource "aws_ec2_client_vpn_endpoint" "cvpn" {
   description            = "Client VPN"
-  server_certificate_arn = aws_acm_certificate.cvpn_server_certificate.arn
+  server_certificate_arn = aws_acm_certificate.server_cert.arn
   client_cidr_block      = local.client_cidr # check
   split_tunnel           = "true"
   security_group_ids     = [module.cvpn_access_security_group.security_group_id]
@@ -38,7 +38,7 @@ resource "aws_ec2_client_vpn_endpoint" "cvpn" {
 
   authentication_options {
     type                       = "certificate-authentication"
-    root_certificate_chain_arn = aws_acm_certificate.root_user_cvpn_client_certificate.arn
+    root_certificate_chain_arn = aws_acm_certificate.server_cert.arn
   }
 
   connection_log_options {
@@ -47,13 +47,11 @@ resource "aws_ec2_client_vpn_endpoint" "cvpn" {
 }
 
 # Client VPN association can take over the 10 minutes, and reach timeouts
-
 resource "aws_ec2_client_vpn_authorization_rule" "authorize_cvpn_vpc" {
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.cvpn.id
   target_network_cidr    = module.vpc.vpc_cidr_block # check
   authorize_all_groups   = true
 }
-
 
 # For each https://github.com/hashicorp/terraform-provider-aws/issues/14717
 resource "aws_ec2_client_vpn_network_association" "associate_subnet_1" {
@@ -102,201 +100,91 @@ module "cvpn_access_security_group" {
 }
 
 ################################################################################
-# Certs: Root CA
+# Certs
 ################################################################################
 
-# Type set to ROOT
-
-resource "aws_acmpca_certificate_authority" "root_ca" {
-  type = "ROOT"
-
-  certificate_authority_configuration {
-    key_algorithm     = "RSA_4096"
-    signing_algorithm = "SHA512WITHRSA"
-
-    subject {
-      common_name = "root.ca.cert.private.mydomain.com"
-    }
-  }
+variable "domain_name" {
+  default = "example.com"
 }
 
-resource "aws_acmpca_certificate" "root_ca_certificate" {
-  certificate_authority_arn   = aws_acmpca_certificate_authority.root_ca.arn
-  certificate_signing_request = aws_acmpca_certificate_authority.root_ca.certificate_signing_request
-  signing_algorithm           = "SHA512WITHRSA"
-
-  template_arn = "arn:${data.aws_partition.current.partition}:acm-pca:::template/RootCACertificate/V1"
-
-  validity {
-    type  = "YEARS"
-    value = 5
-  }
-}
-
-resource "aws_acmpca_certificate_authority_certificate" "root_ca_certificate_association" {
-  certificate_authority_arn = aws_acmpca_certificate_authority.root_ca.arn
-
-  certificate       = aws_acmpca_certificate.root_ca_certificate.certificate
-  certificate_chain = aws_acmpca_certificate.root_ca_certificate.certificate_chain
-}
-
-################################################################################
-# Certs: CVPN Server Certificate
-################################################################################
-
-# certificate_authority_arn = ARN of Root CA
-
-resource "tls_private_key" "cvpn_server_certificate_private_key" {
+# CA
+resource "tls_private_key" "ca_key" {
   algorithm = "RSA"
-  rsa_bits  = "2048"
+  rsa_bits  = 2048
 }
 
-resource "tls_cert_request" "cvpn_server_certificate_signing_request" {
-  private_key_pem = tls_private_key.cvpn_server_certificate_private_key.private_key_pem
+resource "tls_self_signed_cert" "ca_cert" {
+  private_key_pem = tls_private_key.ca_key.private_key_pem
 
   subject {
-    common_name = "cvpn-server.cvpn.cert.private.mydomain.com"
-  }
-}
-
-resource "aws_acmpca_certificate" "cvpn_server_certificate" {
-  certificate_authority_arn   = aws_acmpca_certificate_authority.root_ca.arn # Root CA
-  certificate_signing_request = tls_cert_request.cvpn_server_certificate_signing_request.cert_request_pem
-  signing_algorithm           = "SHA512WITHRSA"
-  validity {
-    type  = "YEARS"
-    value = 3
-  }
-}
-
-resource "aws_acm_certificate" "cvpn_server_certificate" {
-  private_key       = tls_private_key.cvpn_server_certificate_private_key.private_key_pem
-  certificate_body  = aws_acmpca_certificate.cvpn_server_certificate.certificate
-  certificate_chain = aws_acmpca_certificate.cvpn_server_certificate.certificate_chain
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-################################################################################
-# Certs: CVPN Client CA
-################################################################################
-
-# Type SUBORDINATE,
-# certificate_authority_arn = ARN of Root CA
-
-resource "aws_acmpca_certificate_authority" "cvpn_client_ca" {
-  type = "SUBORDINATE"
-
-  certificate_authority_configuration {
-    key_algorithm     = "RSA_4096"
-    signing_algorithm = "SHA512WITHRSA"
-
-    subject {
-      common_name = "cvpn-client.ca.cert.private.mydomain.com"
-    }
+    common_name  = "ca.${var.domain_name}"
   }
 
+  is_ca_certificate     = true
+  validity_period_hours = 87600
+  allowed_uses = [
+    "cert_signing",
+    "crl_signing",
+  ]
 }
 
-resource "aws_acmpca_certificate" "cvpn_client_ca_certificate" {
-  certificate_authority_arn   = aws_acmpca_certificate_authority.root_ca.arn # Root CA
-  certificate_signing_request = aws_acmpca_certificate_authority.cvpn_client_ca.certificate_signing_request
-  signing_algorithm           = "SHA512WITHRSA"
-
-  template_arn = "arn:${data.aws_partition.current.partition}:acm-pca:::template/SubordinateCACertificate_PathLen0/V1"
-
-  validity {
-    type  = "YEARS"
-    value = 3
-  }
-}
-
-resource "aws_acmpca_certificate_authority_certificate" "cvpn_client_ca_certificate_association" {
-  certificate_authority_arn = aws_acmpca_certificate_authority.cvpn_client_ca.arn
-  certificate               = aws_acmpca_certificate.cvpn_client_ca_certificate.certificate
-  certificate_chain         = aws_acmpca_certificate.cvpn_client_ca_certificate.certificate_chain
-}
-
-################################################################################
-# Certs: CVPN Root Client Certificate
-################################################################################
-
-# only used as part of the CVPN Server configuration in AWS
-# certificate_authority_arn = ARN of Client CA
-
-resource "tls_private_key" "root_user_cvpn_client_certificate_private_key" {
+# Server
+resource "tls_private_key" "server_key" {
   algorithm = "RSA"
-  rsa_bits  = "2048"
+  rsa_bits  = 2048
 }
 
-resource "tls_cert_request" "root_user_cvpn_client_certificate_signing_request" {
-  private_key_pem = tls_private_key.root_user_cvpn_client_certificate_private_key.private_key_pem
+resource "tls_cert_request" "server_req" {
+  private_key_pem = tls_private_key.server_key.private_key_pem
 
   subject {
-    common_name = "root-user.cvpn.cert.private.mydomain.com"
+    common_name  = "vpn.${var.domain_name}"
   }
 }
 
-resource "aws_acmpca_certificate" "root_user_cvpn_client_certificate" {
-  certificate_authority_arn   = aws_acmpca_certificate_authority.cvpn_client_ca.arn
-  certificate_signing_request = tls_cert_request.root_user_cvpn_client_certificate_signing_request.cert_request_pem
-  signing_algorithm           = "SHA512WITHRSA"
-  validity {
-    type  = "YEARS"
-    value = 1
-  }
+resource "tls_locally_signed_cert" "server_cert" {
+  cert_request_pem     = tls_cert_request.server_req.cert_request_pem
+  ca_private_key_pem   = tls_private_key.ca_key.private_key_pem
+  ca_cert_pem          = tls_self_signed_cert.ca_cert.cert_pem
+
+  validity_period_hours = 87600
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
 }
 
-resource "aws_acm_certificate" "root_user_cvpn_client_certificate" {
-  private_key       = tls_private_key.root_user_cvpn_client_certificate_private_key.private_key_pem
-  certificate_body  = aws_acmpca_certificate.root_user_cvpn_client_certificate.certificate
-  certificate_chain = aws_acmpca_certificate.root_user_cvpn_client_certificate.certificate_chain
-
-  lifecycle {
-    create_before_destroy = true
-  }
+# Import to ACM for Client VPN use
+resource "aws_acm_certificate" "server_cert" {
+  private_key      = tls_private_key.server_key.private_key_pem
+  certificate_body = tls_locally_signed_cert.server_cert.cert_pem
+  certificate_chain = tls_self_signed_cert.ca_cert.cert_pem
 }
 
-################################################################################
-# Certs: CVPN Client Certificate
-################################################################################
-
-# Enables a clients to connect to the CVPN Server
-# certificate_authority_arn = ARN of Client CA
-
-resource "tls_private_key" "user_1_cvpn_client_certificate_private_key" {
+# Client
+resource "tls_private_key" "client_key" {
   algorithm = "RSA"
-  rsa_bits  = "2048"
+  rsa_bits  = 2048
 }
 
-resource "tls_cert_request" "user_1_cvpn_client_certificate_signing_request" {
-  private_key_pem = tls_private_key.user_1_cvpn_client_certificate_private_key.private_key_pem
+resource "tls_cert_request" "client_req" {
+  private_key_pem = tls_private_key.client_key.private_key_pem
 
   subject {
-    common_name = "user-1.cvpn.cert.private.mydomain.com"
+    common_name = "client.${var.domain_name}"
   }
 }
 
-resource "aws_acmpca_certificate" "user_1_cvpn_client_certificate" {
-  certificate_authority_arn   = aws_acmpca_certificate_authority.cvpn_client_ca.arn
-  certificate_signing_request = tls_cert_request.user_1_cvpn_client_certificate_signing_request.cert_request_pem
-  signing_algorithm           = "SHA512WITHRSA"
-  validity {
-    type  = "YEARS"
-    value = 1
-  }
-}
+resource "tls_locally_signed_cert" "client_cert" {
+  cert_request_pem     = tls_cert_request.client_req.cert_request_pem
+  ca_private_key_pem   = tls_private_key.ca_key.private_key_pem
+  ca_cert_pem          = tls_self_signed_cert.ca_cert.cert_pem
 
-resource "aws_acm_certificate" "user_1_cvpn_client_certificate" {
-  private_key       = tls_private_key.user_1_cvpn_client_certificate_private_key.private_key_pem
-  certificate_body  = aws_acmpca_certificate.user_1_cvpn_client_certificate.certificate
-  certificate_chain = aws_acmpca_certificate.user_1_cvpn_client_certificate.certificate_chain
-
-  lifecycle {
-    create_before_destroy = true
-  }
+  validity_period_hours = 87600
+  allowed_uses = [
+    "client_auth"
+  ]
 }
 
 ################################################################################
@@ -316,12 +204,12 @@ resource "null_resource" "download_cvpn_config" {
 
       # Embed the client certificate
       echo '<cert>' >> ./client-config.ovpn
-      echo "${aws_acm_certificate.user_1_cvpn_client_certificate.certificate_body}" >> ./client-config.ovpn
+      echo "${tls_locally_signed_cert.client_cert.cert_request_pem}" >> ./client-config.ovpn
       echo '</cert>' >> ./client-config.ovpn
 
       # Embed the private key
       echo '<key>' >> ./client-config.ovpn
-      echo "${tls_private_key.user_1_cvpn_client_certificate_private_key.private_key_pem}" >> ./client-config.ovpn
+      echo "${tls_private_key.server_key.private_key_pem}" >> ./client-config.ovpn
       echo '</key>' >> ./client-config.ovpn
     EOF
     interpreter = ["/bin/bash", "-c"]

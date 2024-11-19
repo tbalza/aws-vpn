@@ -1,0 +1,10 @@
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+*.tfvars
+.terraform.lock.hcl
+.terraform/
+.DS_Store
+.idea/
+client-config.ovpn
+.test

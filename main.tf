@@ -10,7 +10,8 @@ locals {
 # VPC
 ################################################################################
 
-module "vpc" { # Creates VPC, subnets, route tables
+# Creates VPC, subnets, route tables
+module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "5.16.0"
 
@@ -25,8 +26,9 @@ module "vpc" { # Creates VPC, subnets, route tables
 # VPN
 ################################################################################
 
+# Creates VPN endpoint
 resource "aws_ec2_client_vpn_endpoint" "cvpn" {
-  description            = "Client VPN"
+  description            = "Client VPN Endpoint"
   server_certificate_arn = aws_acm_certificate.server_cert.arn
   client_cidr_block      = local.client_cidr # check
   split_tunnel           = "true"
@@ -44,27 +46,25 @@ resource "aws_ec2_client_vpn_endpoint" "cvpn" {
   }
 }
 
-# Client VPN association can take over the 10 minutes, and reach timeouts
+# Associates VPN to VPC (can take around ~10 minutes to complete)
 resource "aws_ec2_client_vpn_authorization_rule" "authorize_cvpn_vpc" {
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.cvpn.id
   target_network_cidr    = module.vpc.vpc_cidr_block # check
   authorize_all_groups   = true
 }
 
-resource "aws_ec2_client_vpn_network_association" "associate_subnet_1" {
+# Associates private subnets recursively
+resource "aws_ec2_client_vpn_network_association" "associate_subnet" {
+  for_each               = toset(module.vpc.private_subnets)
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.cvpn.id
-  subnet_id              = module.vpc.private_subnets[0]
-}
-
-resource "aws_ec2_client_vpn_network_association" "associate_subnet_2" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.cvpn.id
-  subnet_id              = module.vpc.private_subnets[1]
+  subnet_id              = each.value
 }
 
 ################################################################################
 # SG
 ################################################################################
 
+# Allows external access to VPN
 module "cvpn_access_security_group" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "5.2.0"
@@ -104,12 +104,15 @@ variable "domain_name" {
   default = "example.com"
 }
 
-# CA
+### CA
+
+# Creates CA private key
 resource "tls_private_key" "ca_key" {
   algorithm = "RSA"
   rsa_bits  = 2048
 }
 
+# Creates a self-signed CA TLS certificate in PEM format
 resource "tls_self_signed_cert" "ca_cert" {
   private_key_pem = tls_private_key.ca_key.private_key_pem
 
@@ -117,7 +120,7 @@ resource "tls_self_signed_cert" "ca_cert" {
     common_name = "ca.${var.domain_name}"
   }
 
-  is_ca_certificate     = true
+  is_ca_certificate     = true # can be used to sign other certificates and control certificate revocation lists
   validity_period_hours = 87600
   allowed_uses = [
     "cert_signing",
@@ -125,12 +128,15 @@ resource "tls_self_signed_cert" "ca_cert" {
   ]
 }
 
-# Server
+### Server
+
+# Creates server private key
 resource "tls_private_key" "server_key" {
   algorithm = "RSA"
   rsa_bits  = 2048
 }
 
+# Generates server CSR used to request cert from CA
 resource "tls_cert_request" "server_req" {
   private_key_pem = tls_private_key.server_key.private_key_pem
 
@@ -139,6 +145,7 @@ resource "tls_cert_request" "server_req" {
   }
 }
 
+# Creates server certificate signed by a CA
 resource "tls_locally_signed_cert" "server_cert" {
   cert_request_pem   = tls_cert_request.server_req.cert_request_pem
   ca_private_key_pem = tls_private_key.ca_key.private_key_pem
@@ -152,19 +159,22 @@ resource "tls_locally_signed_cert" "server_cert" {
   ]
 }
 
-# Import to ACM for Client VPN use
+# Uploads server certificate to ACM (used by AWS Client VPN)
 resource "aws_acm_certificate" "server_cert" {
   private_key       = tls_private_key.server_key.private_key_pem
   certificate_body  = tls_locally_signed_cert.server_cert.cert_pem
   certificate_chain = tls_self_signed_cert.ca_cert.cert_pem
 }
 
-# Client
+### Client
+
+# Creates client private key
 resource "tls_private_key" "client_key" {
   algorithm = "RSA"
   rsa_bits  = 2048
 }
 
+# Generates client CSR used to request cert from CA
 resource "tls_cert_request" "client_req" {
   private_key_pem = tls_private_key.client_key.private_key_pem
 
@@ -173,6 +183,7 @@ resource "tls_cert_request" "client_req" {
   }
 }
 
+# Creates client certificate signed by a CA
 resource "tls_locally_signed_cert" "client_cert" {
   cert_request_pem   = tls_cert_request.client_req.cert_request_pem
   ca_private_key_pem = tls_private_key.ca_key.private_key_pem
@@ -185,9 +196,10 @@ resource "tls_locally_signed_cert" "client_cert" {
 }
 
 ################################################################################
-# Download Client Configuration and append necessary tags
+# "Client Configuration"
 ################################################################################
 
+# Uses cli to download `.ovpn` file from AWS and embeds additional tags required for VPN endpoint connection
 resource "null_resource" "download_cvpn_config" {
   depends_on = [aws_ec2_client_vpn_endpoint.cvpn]
 

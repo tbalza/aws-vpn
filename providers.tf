@@ -12,7 +12,3 @@ terraform {
     }
   }
 }
-
-# provider "tls" {
-#   # Configuration options
-# }

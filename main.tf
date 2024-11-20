@@ -55,7 +55,7 @@ resource "aws_ec2_client_vpn_authorization_rule" "authorize_cvpn_vpc" {
 
 # Associates private subnets recursively
 resource "aws_ec2_client_vpn_network_association" "associate_subnet" {
-  for_each               = toset(module.vpc.private_subnets)
+  for_each               = {for idx, subnet in module.vpc.private_subnets : idx => subnet} # converts list to map
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.cvpn.id
   subnet_id              = each.value
 }

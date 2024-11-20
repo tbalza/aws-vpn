@@ -196,7 +196,7 @@ resource "tls_locally_signed_cert" "client_cert" {
 }
 
 ################################################################################
-# "Client Configuration"
+# Client Configuration
 ################################################################################
 
 # Uses cli to download `.ovpn` file from AWS and embeds additional tags required for VPN endpoint connection
